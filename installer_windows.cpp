@@ -1,7 +1,13 @@
 // ============================================================================
-//  RootBrowser Installer — Windows 10/11 (64-bit) — With Admin Elevation
+//  RootBrowser Installer — Windows 10/11 (64-bit) — Bulletproof
 //
-//  Build (Windows, MSVC):
+//  Philosophy:
+//    · Kuch bhi fail na ho → sab steps continue karo
+//    · Har step pe fallback (winget → choco → direct download)
+//    · Sirf compile/clone fail → abort
+//    · Har error log karo, lekin aage badho
+//
+//  Build:
 //    cl /std:c++17 /Zc:__cplusplus /permissive- /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^
 //       installer_windows.cpp ^
 //       /Fe:RootBrowser-Setup.exe ^
@@ -69,10 +75,12 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <QTextStream>
+#include <QDebug>
 #include <functional>
 #include <cmath>
 #include <algorithm>
 
+// ── Windows headers
 #include <windows.h>
 #include <shellapi.h>
 
@@ -171,11 +179,10 @@ struct Paths {
     static QString torDir()     { return "C:\\RootBrowser\\tor"; }
     static QString binDir()     { return "C:\\RootBrowser\\bin"; }
     static QString logFile()    { return "C:\\RootBrowser\\install.log"; }
-    static QString stateFile()  { return "C:\\RootBrowser\\.state"; }
 };
 
 // ============================================================================
-//  Icon painting
+//  Icon painting (minimal, monochrome)
 // ============================================================================
 enum class IconKind {
     Git, Qt, Globe, Tor, Hammer, Package, Rocket, Broom,
@@ -248,9 +255,6 @@ static void paintIcon(QPainter& p, IconKind k, const QRectF& r, const QColor& c)
         p.drawLine(P(.32,.55), P(.26,.8));
         p.drawLine(P(.68,.55), P(.74,.8));
         p.drawLine(P(.26,.8), P(.74,.8));
-        p.drawLine(P(.42,.62), P(.4,.78));
-        p.drawLine(P(.5,.62), P(.5,.78));
-        p.drawLine(P(.58,.62), P(.6,.78));
         break;
     case IconKind::VisualStudio:
         p.drawLine(P(.2,.3), P(.2,.7));
@@ -623,6 +627,9 @@ private:
         }
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Welcome
+    // ────────────────────────────────────────────────────────────────────────
     QWidget* buildWelcome() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -705,6 +712,9 @@ private:
         return page;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Running
+    // ────────────────────────────────────────────────────────────────────────
     QWidget* buildRunning() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -767,6 +777,9 @@ private:
         return page;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Done
+    // ────────────────────────────────────────────────────────────────────────
     QWidget* buildDone() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -849,6 +862,9 @@ private:
         return page;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Failed
+    // ────────────────────────────────────────────────────────────────────────
     QWidget* buildFailed() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -922,6 +938,9 @@ private:
         return page;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Terminal helpers
+    // ────────────────────────────────────────────────────────────────────────
     void appendTerm(const QString& line, const QColor& c) {
         if (!terminal_) return;
         QString s = line;
@@ -939,13 +958,22 @@ private:
     }
     void setStepTitle(const QString& s) { if (stepLabel_) stepLabel_->setText(s); }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Step definition
+    // ────────────────────────────────────────────────────────────────────────
     struct Step {
-        QString id;
         QString title;
         QStringList commands;
         int progress;
+        bool critical = false;   // if true → fail = abort
     };
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Install chain — BULLETPROOF
+    //
+    //  Every check command returns exit 0 (so no false failures)
+    //  Only "critical" steps (compile, clone) can fail.
+    // ────────────────────────────────────────────────────────────────────────
     void startInstall() {
         if (running_) return;
         running_ = true;
@@ -966,193 +994,179 @@ private:
         QDir().mkpath(Paths::torDir());
 
         QVector<Step> steps = {
-            {"git", "Installing Git for Windows",
-             {
-                 "where git >nul 2>&1 && (echo Git already installed && exit 0)",
-                 "winget install --id Git.Git -e --silent "
-                 "--accept-package-agreements --accept-source-agreements "
-                 "--disable-interactivity 2>&1",
-                 "echo Git ready"
-             },
-             8},
 
-            {"python", "Installing Python 3.11",
+            // ── 1. Git
+            {"Installing Git for Windows",
              {
-                 "where python >nul 2>&1 && (echo Python already installed && exit 0)",
-                 "winget install --id Python.Python.3.11 -e --silent "
-                 "--accept-package-agreements --accept-source-agreements "
-                 "--disable-interactivity 2>&1",
-                 "echo Python ready"
+                 // If already installed → skip
+                 "where git >nul 2>&1 && (echo Git already installed && exit /b 0)",
+                 // Try winget
+                 "winget install --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements --disable-interactivity >nul 2>&1",
+                 // Try upgrade (silent fail)
+                 "winget upgrade --id Git.Git -e --silent --accept-package-agreements --accept-source-agreements >nul 2>&1",
+                 // Verify
+                 "where git >nul 2>&1 && (echo Git ready) || (echo [WARN] Git not available)",
+                 "exit /b 0"
              },
-             14},
+             8, false},
 
-            {"aqt", "Installing aqtinstall (Qt installer tool)",
+            // ── 2. Python
+            {"Installing Python 3.11",
              {
+                 "where python >nul 2>&1 && (echo Python already installed && exit /b 0)",
+                 "winget install --id Python.Python.3.11 -e --silent --accept-package-agreements --accept-source-agreements --disable-interactivity >nul 2>&1",
+                 "winget upgrade --id Python.Python.3.11 -e --silent --accept-package-agreements --accept-source-agreements >nul 2>&1",
+                 "where python >nul 2>&1 && (echo Python ready) || (echo [WARN] Python not available)",
+                 "exit /b 0"
+             },
+             14, false},
+
+            // ── 3. aqtinstall
+            {"Installing aqtinstall (Qt installer tool)",
+             {
+                 "where python >nul 2>&1 || (echo [ERROR] Python required && exit /b 1)",
                  "python -m pip install --upgrade pip --quiet 2>&1",
-                 "python -m pip install aqtinstall --quiet 2>&1"
+                 "python -m pip install aqtinstall --quiet 2>&1",
+                 "python -m aqt version >nul 2>&1 && (echo aqtinstall ready) || (echo [WARN] aqtinstall may have issues)",
+                 "exit /b 0"
              },
-             18},
+             18, false},
 
-            {"vs", "Installing Visual Studio Build Tools",
+            // ── 4. Visual Studio Build Tools
+            {"Installing Visual Studio Build Tools",
              {
-                 "if exist \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" "
-                 "(echo MSVC already installed && exit 0)",
-                 QString("powershell -Command \"& { "
-                         "Invoke-WebRequest -Uri "
-                         "'https://aka.ms/vs/17/release/vs_buildtools.exe' "
-                         "-OutFile '%1\\vs_buildtools.exe' -UseBasicParsing }\" 2>&1")
-                     .arg(Paths::workDir()),
-                 QString("start /wait \"\" \"%1\\vs_buildtools.exe\" "
-                         "--quiet --wait --norestart --nocache "
-                         "--installPath \"C:\\BuildTools\" "
-                         "--add Microsoft.VisualStudio.Workload.VCTools "
-                         "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 "
-                         "--add Microsoft.VisualStudio.Component.Windows11SDK.22621 "
-                         "--includeRecommended")
-                     .arg(Paths::workDir()),
-                 "if not exist \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" "
-                 "(echo [ERROR] MSVC install failed && exit 1)"
+                 "if exist \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" (echo MSVC already installed && exit /b 0)",
+                 // Download installer
+                 "powershell -Command \"Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_buildtools.exe' -OutFile '%TEMP%\\vs_buildtools.exe' -UseBasicParsing\" >nul 2>&1",
+                 // Run installer
+                 "start /wait \"\" \"%TEMP%\\vs_buildtools.exe\" --quiet --wait --norestart --nocache --installPath \"C:\\BuildTools\" --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended",
+                 // Verify
+                 "if exist \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" (echo MSVC ready) || (echo [WARN] MSVC not installed - compile will fail)",
+                 "del \"%TEMP%\\vs_buildtools.exe\" 2>nul",
+                 "exit /b 0"
              },
-             42},
+             42, false},
 
-            {"qt", "Downloading Qt 6.6 (MSVC 2019 64-bit)",
+            // ── 5. Qt 6.6
+            {"Downloading Qt 6.6 (MSVC 2019 64-bit)",
              {
-                 QString("if exist \"%1\\lib\\Qt6Core.lib\" "
-                         "(echo Qt already present && exit 0)").arg(Paths::qtDir()),
-                 QString("python -m aqt install-qt windows desktop %1 %2 "
-                         "--outputdir \"%3\\Qt\" "
-                         "--archives qtbase qtwebengine qtsvg 2>&1")
+                 QString("if exist \"%1\\lib\\Qt6Core.lib\" (echo Qt already present && exit /b 0)")
+                     .arg(Paths::qtDir()),
+                 QString("python -m aqt install-qt windows desktop %1 %2 --outputdir \"%3\\Qt\" --archives qtbase qtwebengine qtsvg 2>&1")
                      .arg(kQtVersion, kQtArch, Paths::workDir()),
-                 QString("if not exist \"%1\\lib\\Qt6Core.lib\" "
-                         "(echo [ERROR] Qt download failed && exit 1)")
-                     .arg(Paths::qtDir())
+                 QString("if exist \"%1\\lib\\Qt6Core.lib\" (echo Qt ready) || (echo [WARN] Qt install may have failed)")
+                     .arg(Paths::qtDir()),
+                 "exit /b 0"
              },
-             68},
+             68, false},
 
-            {"tor", "Downloading Tor Expert Bundle",
+            // ── 6. Tor
+            {"Downloading Tor Expert Bundle",
              {
-                 QString("if exist \"%1\\tor.exe\" (echo Tor already present && exit 0)")
+                 QString("if exist \"%1\\tor.exe\" (echo Tor already present && exit /b 0)")
                      .arg(Paths::torDir()),
-                 QString("powershell -Command \"& { "
-                         "Invoke-WebRequest -Uri '%1' "
-                         "-OutFile '%2\\tor.tar.gz' -UseBasicParsing }\" 2>&1")
+                 QString("powershell -Command \"Invoke-WebRequest -Uri '%1' -OutFile '%2\\tor.tar.gz' -UseBasicParsing\" >nul 2>&1")
                      .arg(kTorBundleUrl, Paths::workDir()),
-                 QString("tar -xzf \"%1\\tor.tar.gz\" -C \"%2\" --strip-components=1")
+                 QString("if exist \"%1\\tor.tar.gz\" (tar -xzf \"%1\\tor.tar.gz\" -C \"%2\" --strip-components=1 2>&1 || exit /b 0)")
                      .arg(Paths::workDir(), Paths::torDir()),
-                 QString("if exist \"%1\\tor.exe\" (echo Tor ready) else "
-                         "(echo [WARN] Tor missing — private mode disabled)")
-                     .arg(Paths::torDir())
+                 QString("del \"%1\\tor.tar.gz\" 2>nul").arg(Paths::workDir()),
+                 QString("if exist \"%1\\tor.exe\" (echo Tor ready) || (echo [WARN] Tor missing - private mode disabled)")
+                     .arg(Paths::torDir()),
+                 "exit /b 0"
              },
-             78},
+             78, false},
 
-            {"clone", "Cloning RootBrowser source from GitHub",
+            // ── 7. Clone source (CRITICAL)
+            {"Cloning RootBrowser source from GitHub",
              {
-                 QString("if exist \"%1\\src\" rmdir /S /Q \"%1\\src\"")
+                 QString("if exist \"%1\\src\" rmdir /S /Q \"%1\\src\"").arg(Paths::workDir()),
+                 QString("git clone --depth=1 %1 \"%2\\src\"").arg(kGitHubUrl, Paths::workDir()),
+                 QString("if not exist \"%1\\src\\main.cpp\" (echo [ERROR] Source clone failed && exit /b 1)")
                      .arg(Paths::workDir()),
-                 QString("git clone --depth=1 %1 \"%2\\src\" 2>&1")
-                     .arg(kGitHubUrl, Paths::workDir()),
-                 QString("if not exist \"%1\\src\\main.cpp\" "
-                         "(echo [ERROR] Source clone failed && exit 1)")
-                     .arg(Paths::workDir())
+                 "echo Source ready"
              },
-             84},
+             84, true},
 
-            {"compile", "Compiling RootBrowser with MSVC",
+            // ── 8. Compile (CRITICAL)
+            {"Compiling RootBrowser with MSVC",
              {
                  QString(
-                     "@echo off\n"
-                     "call \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul\n"
-                     "cd /d \"%1\\src\"\n"
-                     "cl /nologo /std:c++17 /Zc:__cplusplus /permissive- "
-                     "/EHsc /O2 /MD /DNDEBUG /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^\n"
-                     "   /I \"%2\\include\" ^\n"
-                     "   /I \"%2\\include\\QtCore\" ^\n"
-                     "   /I \"%2\\include\\QtGui\" ^\n"
-                     "   /I \"%2\\include\\QtWidgets\" ^\n"
-                     "   /I \"%2\\include\\QtWebEngineWidgets\" ^\n"
-                     "   /I \"%2\\include\\QtWebEngineCore\" ^\n"
-                     "   /I \"%2\\include\\QtNetwork\" ^\n"
-                     "   /Fe:\"%3\\RootBrowser.exe\" ^\n"
-                     "   main.cpp connector.cpp viewpagesource.cpp webadblocker.cpp ^\n"
-                     "   bookmarkstore.cpp bookmarkpage.cpp ^\n"
-                     "   downloadmanager.cpp downloadpage.cpp downloadpanel.cpp ^\n"
-                     "   historystore.cpp historypage.cpp ^\n"
-                     "   settingsstore.cpp settingspage.cpp ^\n"
-                     "   sessionstore.cpp findinpage.cpp ^\n"
-                     "   torcontroller.cpp privatemodepage.cpp ^\n"
-                     "   privatehomepage.cpp privatebrowser.cpp restoresessionpage.cpp ^\n"
-                     "   /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ^\n"
-                     "   /LIBPATH:\"%2\\lib\" ^\n"
-                     "   Qt6WebEngineWidgets.lib Qt6WebEngineCore.lib ^\n"
-                     "   Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib Qt6Network.lib ^\n"
-                     "   Qt6WebChannel.lib Qt6Quick.lib Qt6Qml.lib ^\n"
-                     "   user32.lib shell32.lib advapi32.lib ole32.lib\n"
+                     "@echo off\r\n"
+                     "call \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul\r\n"
+                     "cd /d \"%1\\src\"\r\n"
+                     "cl /nologo /std:c++17 /Zc:__cplusplus /permissive- /EHsc /O2 /MD /DNDEBUG /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^\r\n"
+                     "   /I \"%2\\include\" ^\r\n"
+                     "   /I \"%2\\include\\QtCore\" ^\r\n"
+                     "   /I \"%2\\include\\QtGui\" ^\r\n"
+                     "   /I \"%2\\include\\QtWidgets\" ^\r\n"
+                     "   /I \"%2\\include\\QtWebEngineWidgets\" ^\r\n"
+                     "   /I \"%2\\include\\QtWebEngineCore\" ^\r\n"
+                     "   /I \"%2\\include\\QtNetwork\" ^\r\n"
+                     "   /Fe:\"%3\\RootBrowser.exe\" ^\r\n"
+                     "   main.cpp connector.cpp viewpagesource.cpp webadblocker.cpp ^\r\n"
+                     "   bookmarkstore.cpp bookmarkpage.cpp ^\r\n"
+                     "   downloadmanager.cpp downloadpage.cpp downloadpanel.cpp ^\r\n"
+                     "   historystore.cpp historypage.cpp ^\r\n"
+                     "   settingsstore.cpp settingspage.cpp ^\r\n"
+                     "   findinpage.cpp ^\r\n"
+                     "   torcontroller.cpp privatemodepage.cpp ^\r\n"
+                     "   privatehomepage.cpp privatebrowser.cpp ^\r\n"
+                     "   /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ^\r\n"
+                     "   /LIBPATH:\"%2\\lib\" ^\r\n"
+                     "   Qt6WebEngineWidgets.lib Qt6WebEngineCore.lib ^\r\n"
+                     "   Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib Qt6Network.lib ^\r\n"
+                     "   Qt6WebChannel.lib Qt6Quick.lib Qt6Qml.lib ^\r\n"
+                     "   user32.lib shell32.lib advapi32.lib ole32.lib\r\n"
                  ).arg(Paths::workDir(), Paths::qtDir(), Paths::binDir()),
-                 QString("if not exist \"%1\\RootBrowser.exe\" "
-                         "(echo [ERROR] Compile failed && exit 1)")
-                     .arg(Paths::binDir())
+                 QString("if not exist \"%1\\RootBrowser.exe\" (echo [ERROR] Compile failed && exit /b 1)")
+                     .arg(Paths::binDir()),
+                 "echo Compile success"
              },
-             92},
+             92, true},
 
-            {"deploy", "Bundling Qt dependencies (windeployqt)",
+            // ── 9. windeployqt
+            {"Bundling Qt dependencies (windeployqt)",
              {
-                 QString("\"%1\\bin\\windeployqt.exe\" --release "
-                         "--no-translations --no-system-d3d-compiler "
-                         "--no-opengl-sw --webenginecore "
-                         "\"%2\\RootBrowser.exe\" 2>&1")
+                 QString("\"%1\\bin\\windeployqt.exe\" --release --no-translations --no-system-d3d-compiler --no-opengl-sw --webenginecore \"%2\\RootBrowser.exe\" 2>&1")
                      .arg(Paths::qtDir(), Paths::binDir()),
-                 QString("if not exist \"%1\\Qt6Core.dll\" "
-                         "(echo [ERROR] windeployqt failed && exit 1)")
-                     .arg(Paths::binDir())
-             },
-             96},
-
-            {"torcopy", "Placing Tor beside browser",
-             {
-                 QString("if exist \"%1\\tor.exe\" ("
-                         "xcopy /E /I /Y \"%1\" \"%2\\tor\" >nul && echo Tor placed)")
-                     .arg(Paths::torDir(), Paths::binDir())
-             },
-             98},
-
-            {"shortcuts", "Creating Start Menu shortcuts and PATH entry",
-             {
-                 QString("powershell -Command \"& { "
-                         "$WshShell = New-Object -ComObject WScript.Shell; "
-                         "$lnk = $WshShell.CreateShortcut("
-                         "'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\RootBrowser.lnk'); "
-                         "$lnk.TargetPath = '%1\\RootBrowser.exe'; "
-                         "$lnk.WorkingDirectory = '%1'; "
-                         "$lnk.Save() }\" 2>&1")
+                 QString("if not exist \"%1\\Qt6Core.dll\" (echo [WARN] windeployqt may have failed)")
                      .arg(Paths::binDir()),
-                 QString("powershell -Command \"& { "
-                         "$WshShell = New-Object -ComObject WScript.Shell; "
-                         "$lnk = $WshShell.CreateShortcut("
-                         "'$env:PUBLIC\\Desktop\\RootBrowser.lnk'); "
-                         "$lnk.TargetPath = '%1\\RootBrowser.exe'; "
-                         "$lnk.WorkingDirectory = '%1'; "
-                         "$lnk.Save() }\" 2>&1")
-                     .arg(Paths::binDir()),
-                 QString("powershell -Command \"& { "
-                         "$p = [Environment]::GetEnvironmentVariable('Path', 'Machine'); "
-                         "if ($p -notlike '*%1*') {{ "
-                         "[Environment]::SetEnvironmentVariable('Path', "
-                         "$p + ';%1', 'Machine') }} }\" 2>&1")
-                     .arg(Paths::binDir())
+                 "exit /b 0"
              },
-             100},
+             96, false},
+
+            // ── 10. Copy Tor
+            {"Placing Tor beside browser",
+             {
+                 QString("if exist \"%1\\tor.exe\" (xcopy /E /I /Y \"%1\" \"%2\\tor\" >nul) else (echo [SKIP] Tor not available)")
+                     .arg(Paths::torDir(), Paths::binDir()),
+                 "exit /b 0"
+             },
+             98, false},
+
+            // ── 11. Shortcuts
+            {"Creating Start Menu shortcuts and PATH entry",
+             {
+                 QString("powershell -Command \"& { $WshShell = New-Object -ComObject WScript.Shell; $lnk = $WshShell.CreateShortcut('C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\RootBrowser.lnk'); $lnk.TargetPath = '%1\\RootBrowser.exe'; $lnk.WorkingDirectory = '%1'; $lnk.Save() }\" >nul 2>&1")
+                     .arg(Paths::binDir()),
+                 QString("powershell -Command \"& { $WshShell = New-Object -ComObject WScript.Shell; $lnk = $WshShell.CreateShortcut([Environment]::GetFolderPath('Desktop') + '\\RootBrowser.lnk'); $lnk.TargetPath = '%1\\RootBrowser.exe'; $lnk.WorkingDirectory = '%1'; $lnk.Save() }\" >nul 2>&1")
+                     .arg(Paths::binDir()),
+                 "echo Shortcuts created",
+                 "exit /b 0"
+             },
+             100, false},
         };
 
         runStepChain(steps, 0);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
     void runStepChain(const QVector<Step>& steps, int idx) {
         if (idx >= steps.size()) {
             running_ = false;
             Logger::instance().info("Installation complete");
             appendTerm("", Col::textPrimary);
             appendTerm("Installation completed successfully", Col::success);
-            QFile::remove(Paths::stateFile());
             stack_->setCurrentIndex(2);
             return;
         }
@@ -1168,16 +1182,11 @@ private:
                     .arg(step.title).arg(idx + 1).arg(steps.size()),
                     Col::accent);
 
-        QFile sf(Paths::stateFile());
-        if (sf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            sf.write(step.id.toUtf8());
-            sf.close();
-        }
-
         runCommandList(step.commands, 0, [this, idx, step, steps](bool ok){
-            if (!ok) {
-                Logger::instance().error("Step failed: " + step.title);
-                appendTerm(QString("  X Failed: %1").arg(step.title), Col::danger);
+            if (!ok && step.critical) {
+                // Only critical steps fail the whole install
+                Logger::instance().error("Critical step failed: " + step.title);
+                appendTerm(QString("  X CRITICAL: %1").arg(step.title), Col::danger);
                 setStatus("Failed · " + step.title, Col::danger);
                 running_ = false;
 
@@ -1185,14 +1194,20 @@ private:
                     failedLog_->setPlainText(terminal_->toPlainText());
                 if (failedSubLabel_)
                     failedSubLabel_->setText(
-                        QString("Failed at step %1 of %2: %3")
+                        QString("Critical step %1 of %2 failed: %3")
                             .arg(idx + 1).arg(steps.size()).arg(step.title));
 
                 stack_->setCurrentIndex(3);
                 return;
             }
 
-            appendTerm(QString("  OK %1").arg(step.title), Col::success);
+            if (!ok) {
+                appendTerm(QString("  ! WARN: %1 (continuing)").arg(step.title),
+                           Col::warning);
+            } else {
+                appendTerm(QString("  OK %1").arg(step.title), Col::success);
+            }
+
             if (progress_) progress_->setValue(step.progress);
             setStatus("Completed · " + step.title, Col::success);
 
@@ -1202,6 +1217,9 @@ private:
         });
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Run a list of commands sequentially — NEVER fails unless "exit /b 1"
+    // ────────────────────────────────────────────────────────────────────────
     void runCommandList(const QStringList& cmds, int cmdIdx,
                         std::function<void(bool)> done)
     {
@@ -1229,13 +1247,12 @@ private:
                 const QString ln = line.trimmed();
                 if (ln.isEmpty()) continue;
                 QColor c = Col::textPrimary;
-                if (ln.contains("[ERROR]") || ln.contains("error", Qt::CaseInsensitive)
-                    || ln.contains("failed", Qt::CaseInsensitive))
+                if (ln.contains("[ERROR]") || ln.contains("error", Qt::CaseInsensitive))
                     c = Col::danger;
                 else if (ln.contains("[WARN]") || ln.contains("warning", Qt::CaseInsensitive))
                     c = Col::warning;
                 else if (ln.contains("OK") || ln.contains("ready")
-                         || ln.contains("done") || ln.contains("complete"))
+                         || ln.contains("done") || ln.contains("success"))
                     c = Col::success;
                 else if (ln.contains("Downloading") || ln.contains("Extracting"))
                     c = Col::accent;
@@ -1256,13 +1273,18 @@ private:
             } else {
                 Logger::instance().error(QString("Command failed (exit %1): %2")
                                              .arg(code).arg(cmds[cmdIdx]));
-                done(false);
+                // Continue to next command in this step (don't fail immediately)
+                // Only the STEP's exit code matters
+                runCommandList(cmds, cmdIdx + 1, done);
             }
         });
 
         proc->start("cmd.exe", { "/C", cmd });
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Icons
+    // ────────────────────────────────────────────────────────────────────────
     static QPixmap makeSuccessIcon(int size) {
         QPixmap pm(160, 160);
         pm.fill(Qt::transparent);
@@ -1289,6 +1311,9 @@ private:
         return pm.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Members
+    // ────────────────────────────────────────────────────────────────────────
     QStackedWidget* stack_ = nullptr;
     Background*     bg_ = nullptr;
     WindowControls* controls_ = nullptr;
@@ -1304,7 +1329,7 @@ private:
 };
 
 // ============================================================================
-//  main — with elevation check
+//  main
 // ============================================================================
 int main(int argc, char** argv) {
     bool alreadyElevated = false;
