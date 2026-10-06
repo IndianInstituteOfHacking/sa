@@ -1,15 +1,6 @@
 // ============================================================================
 //  RootBrowser Installer — Windows 10/11 (64-bit) — With Admin Elevation
 //
-//  ZERO pre-requisites. Downloads and installs:
-//    · Git for Windows
-//    · Python 3.11
-//    · Visual Studio 2022 Build Tools (with UAC)
-//    · Qt 6.6 (MSVC 2019 64-bit)
-//    · Tor Expert Bundle
-//    · RootBrowser source (from GitHub)
-//    · Compiles + bundles + creates shortcuts
-//
 //  Build (Windows, MSVC):
 //    cl /std:c++17 /Zc:__cplusplus /permissive- /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^
 //       installer_windows.cpp ^
@@ -18,13 +9,12 @@
 //       /I "%QTDIR%\include\QtWidgets" ^
 //       /I "%QTDIR%\include\QtGui" ^
 //       /I "%QTDIR%\include\QtCore" ^
-//       /link /SUBSYSTEM:WINDOWS ^
+//       /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ^
 //       /LIBPATH:"%QTDIR%\lib" ^
 //       Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib ^
 //       user32.lib shell32.lib advapi32.lib
 // ============================================================================
 
-// ── Windows macro fixes (MUST come before any other includes)
 #ifndef NOMINMAX
     #define NOMINMAX
 #endif
@@ -83,7 +73,6 @@
 #include <cmath>
 #include <algorithm>
 
-// ── Windows headers (after NOMINMAX)
 #include <windows.h>
 #include <shellapi.h>
 
@@ -92,7 +81,6 @@
 // ============================================================================
 static const char* kAppName     = "RootBrowser Setup";
 static const char* kGitHubUrl   = "https://github.com/IndianInstituteOfHacking/mk.git";
-static const char* kDisplayName = "RootBrowser";
 static const char* kVersion     = "1.0.0";
 
 static const char* kQtVersion   = "6.6.0";
@@ -177,27 +165,13 @@ namespace Col {
 //  Paths
 // ============================================================================
 struct Paths {
-    static QString installDir() {
-        return "C:\\RootBrowser";
-    }
-    static QString workDir() {
-        return "C:\\RootBrowser\\_build";
-    }
-    static QString qtDir() {
-        return "C:\\RootBrowser\\Qt\\" + QString(kQtVersion) + "\\msvc2019_64";
-    }
-    static QString torDir() {
-        return "C:\\RootBrowser\\tor";
-    }
-    static QString binDir() {
-        return "C:\\RootBrowser\\bin";
-    }
-    static QString logFile() {
-        return "C:\\RootBrowser\\install.log";
-    }
-    static QString stateFile() {
-        return "C:\\RootBrowser\\.state";
-    }
+    static QString installDir() { return "C:\\RootBrowser"; }
+    static QString workDir()    { return "C:\\RootBrowser\\_build"; }
+    static QString qtDir()      { return "C:\\RootBrowser\\Qt\\" + QString(kQtVersion) + "\\msvc2019_64"; }
+    static QString torDir()     { return "C:\\RootBrowser\\tor"; }
+    static QString binDir()     { return "C:\\RootBrowser\\bin"; }
+    static QString logFile()    { return "C:\\RootBrowser\\install.log"; }
+    static QString stateFile()  { return "C:\\RootBrowser\\.state"; }
 };
 
 // ============================================================================
@@ -992,7 +966,6 @@ private:
         QDir().mkpath(Paths::torDir());
 
         QVector<Step> steps = {
-
             {"git", "Installing Git for Windows",
              {
                  "where git >nul 2>&1 && (echo Git already installed && exit 0)",
@@ -1108,7 +1081,7 @@ private:
                      "   sessionstore.cpp findinpage.cpp ^\n"
                      "   torcontroller.cpp privatemodepage.cpp ^\n"
                      "   privatehomepage.cpp privatebrowser.cpp restoresessionpage.cpp ^\n"
-                     "   /link /SUBSYSTEM:WINDOWS ^\n"
+                     "   /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ^\n"
                      "   /LIBPATH:\"%2\\lib\" ^\n"
                      "   Qt6WebEngineWidgets.lib Qt6WebEngineCore.lib ^\n"
                      "   Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib Qt6Network.lib ^\n"
