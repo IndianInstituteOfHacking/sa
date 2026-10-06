@@ -10,10 +10,9 @@
 //    · RootBrowser source (from GitHub)
 //    · Compiles + bundles + creates shortcuts
 //
-//  Automatically requests administrator privileges at startup.
-//
 //  Build (Windows, MSVC):
-//    cl /std:c++17 /EHsc /O2 /MD installer_windows.cpp ^
+//    cl /std:c++17 /Zc:__cplusplus /permissive- /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^
+//       installer_windows.cpp ^
 //       /Fe:RootBrowser-Setup.exe ^
 //       /I "%QTDIR%\include" ^
 //       /I "%QTDIR%\include\QtWidgets" ^
@@ -24,6 +23,20 @@
 //       Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib ^
 //       user32.lib shell32.lib advapi32.lib
 // ============================================================================
+
+// ── Windows macro fixes (MUST come before any other includes)
+#ifndef NOMINMAX
+    #define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef UNICODE
+    #define UNICODE
+#endif
+#ifndef _UNICODE
+    #define _UNICODE
+#endif
 
 #include <QApplication>
 #include <QWidget>
@@ -68,8 +81,9 @@
 #include <QTextStream>
 #include <functional>
 #include <cmath>
+#include <algorithm>
 
-// ── Windows headers
+// ── Windows headers (after NOMINMAX)
 #include <windows.h>
 #include <shellapi.h>
 
@@ -107,7 +121,6 @@ static bool isRunningAsAdmin() {
     return isAdmin == TRUE;
 }
 
-// Re-launch self with admin rights, returns true if a new process was launched.
 static bool relaunchAsAdmin() {
     wchar_t exePath[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH))
@@ -117,14 +130,14 @@ static bool relaunchAsAdmin() {
     sei.cbSize       = sizeof(sei);
     sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
     sei.hwnd         = nullptr;
-    sei.lpVerb       = L"runas";          // ← triggers UAC
+    sei.lpVerb       = L"runas";
     sei.lpFile       = exePath;
     sei.lpParameters = L"--elevated";
     sei.lpDirectory  = nullptr;
     sei.nShow        = SW_NORMAL;
 
     if (!ShellExecuteExW(&sei))
-        return false;   // user cancelled UAC or failure
+        return false;
 
     if (sei.hProcess)
         CloseHandle(sei.hProcess);
@@ -161,7 +174,7 @@ namespace Col {
 }
 
 // ============================================================================
-//  Paths (all under C:\RootBrowser\ since we're admin)
+//  Paths
 // ============================================================================
 struct Paths {
     static QString installDir() {
@@ -172,9 +185,6 @@ struct Paths {
     }
     static QString qtDir() {
         return "C:\\RootBrowser\\Qt\\" + QString(kQtVersion) + "\\msvc2019_64";
-    }
-    static QString vsDir() {
-        return "C:\\BuildTools";
     }
     static QString torDir() {
         return "C:\\RootBrowser\\tor";
@@ -203,7 +213,7 @@ static void paintIcon(QPainter& p, IconKind k, const QRectF& r, const QColor& c)
     p.setRenderHint(QPainter::Antialiasing);
     const qreal s = r.width();
     auto P = [&](qreal x, qreal y) { return QPointF(r.x() + x * s, r.y() + y * s); };
-    QPen pen(c, std::max<qreal>(1.4, s * 0.10),
+    QPen pen(c, (std::max)(static_cast<qreal>(1.4), s * 0.10),
              Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
@@ -324,7 +334,7 @@ public:
         const qreal globeR = 78;
         p.drawEllipse(QPointF(cx, cy), globeR, globeR);
         for (qreal y = -globeR; y <= globeR; y += globeR/2.2) {
-            const qreal r = std::sqrt(std::max(0.0, globeR*globeR - y*y));
+            const qreal r = std::sqrt((std::max)(0.0, globeR*globeR - y*y));
             p.drawLine(QPointF(cx - r, cy + y), QPointF(cx + r, cy + y));
         }
         for (qreal x = -globeR; x <= globeR; x += globeR/3.0) {
@@ -333,7 +343,8 @@ public:
             p.drawEllipse(QPointF(cx, cy), rx, globeR);
         }
 
-        QRadialGradient innerGlow(QPointF(cx, cy), globeR);
+        const QPointF glowCenter(cx, cy);
+        QRadialGradient innerGlow(glowCenter, globeR);
         innerGlow.setColorAt(0, QColor(Col::logoTeal.red(), Col::logoTeal.green(),
                                         Col::logoTeal.blue(), 30));
         innerGlow.setColorAt(1, QColor(0, 0, 0, 0));
@@ -403,7 +414,7 @@ protected:
         g.setColorAt(1, Col::bg);
         p.fillRect(rect(), g);
         const QPointF c(width() * 0.5, height() * 0.2);
-        QRadialGradient rg(c, std::max(width(), height()) * 0.7);
+        QRadialGradient rg(c, (std::max)(width(), height()) * 0.7);
         rg.setColorAt(0, QColor(Col::accent.red(), Col::accent.green(),
                                 Col::accent.blue(), 10));
         rg.setColorAt(1, QColor(0, 0, 0, 0));
@@ -638,7 +649,6 @@ private:
         }
     }
 
-    // ── Screen 1: Welcome
     QWidget* buildWelcome() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -721,7 +731,6 @@ private:
         return page;
     }
 
-    // ── Screen 2: Running
     QWidget* buildRunning() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -784,7 +793,6 @@ private:
         return page;
     }
 
-    // ── Screen 3: Done
     QWidget* buildDone() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -867,7 +875,6 @@ private:
         return page;
     }
 
-    // ── Screen 4: Failed
     QWidget* buildFailed() {
         auto* page = new QWidget;
         page->setStyleSheet("background:transparent;");
@@ -941,9 +948,6 @@ private:
         return page;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Terminal helpers
-    // ────────────────────────────────────────────────────────────────────────
     void appendTerm(const QString& line, const QColor& c) {
         if (!terminal_) return;
         QString s = line;
@@ -961,9 +965,6 @@ private:
     }
     void setStepTitle(const QString& s) { if (stepLabel_) stepLabel_->setText(s); }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Install chain
-    // ────────────────────────────────────────────────────────────────────────
     struct Step {
         QString id;
         QString title;
@@ -992,7 +993,6 @@ private:
 
         QVector<Step> steps = {
 
-            // ── 1. Install Git
             {"git", "Installing Git for Windows",
              {
                  "where git >nul 2>&1 && (echo Git already installed && exit 0)",
@@ -1003,7 +1003,6 @@ private:
              },
              8},
 
-            // ── 2. Install Python
             {"python", "Installing Python 3.11",
              {
                  "where python >nul 2>&1 && (echo Python already installed && exit 0)",
@@ -1014,7 +1013,6 @@ private:
              },
              14},
 
-            // ── 3. aqtinstall
             {"aqt", "Installing aqtinstall (Qt installer tool)",
              {
                  "python -m pip install --upgrade pip --quiet 2>&1",
@@ -1022,7 +1020,6 @@ private:
              },
              18},
 
-            // ── 4. Visual Studio Build Tools
             {"vs", "Installing Visual Studio Build Tools",
              {
                  "if exist \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" "
@@ -1045,7 +1042,6 @@ private:
              },
              42},
 
-            // ── 5. Download Qt6
             {"qt", "Downloading Qt 6.6 (MSVC 2019 64-bit)",
              {
                  QString("if exist \"%1\\lib\\Qt6Core.lib\" "
@@ -1060,7 +1056,6 @@ private:
              },
              68},
 
-            // ── 6. Tor bundle
             {"tor", "Downloading Tor Expert Bundle",
              {
                  QString("if exist \"%1\\tor.exe\" (echo Tor already present && exit 0)")
@@ -1077,7 +1072,6 @@ private:
              },
              78},
 
-            // ── 7. Clone source
             {"clone", "Cloning RootBrowser source from GitHub",
              {
                  QString("if exist \"%1\\src\" rmdir /S /Q \"%1\\src\"")
@@ -1090,14 +1084,14 @@ private:
              },
              84},
 
-            // ── 8. Compile
             {"compile", "Compiling RootBrowser with MSVC",
              {
                  QString(
                      "@echo off\n"
                      "call \"C:\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul\n"
                      "cd /d \"%1\\src\"\n"
-                     "cl /nologo /std:c++17 /EHsc /O2 /MD /DNDEBUG /DWIN32 /D_WINDOWS ^\n"
+                     "cl /nologo /std:c++17 /Zc:__cplusplus /permissive- "
+                     "/EHsc /O2 /MD /DNDEBUG /DNOMINMAX /DWIN32_LEAN_AND_MEAN ^\n"
                      "   /I \"%2\\include\" ^\n"
                      "   /I \"%2\\include\\QtCore\" ^\n"
                      "   /I \"%2\\include\\QtGui\" ^\n"
@@ -1127,7 +1121,6 @@ private:
              },
              92},
 
-            // ── 9. windeployqt
             {"deploy", "Bundling Qt dependencies (windeployqt)",
              {
                  QString("\"%1\\bin\\windeployqt.exe\" --release "
@@ -1141,7 +1134,6 @@ private:
              },
              96},
 
-            // ── 10. Copy Tor
             {"torcopy", "Placing Tor beside browser",
              {
                  QString("if exist \"%1\\tor.exe\" ("
@@ -1150,7 +1142,6 @@ private:
              },
              98},
 
-            // ── 11. Shortcuts + PATH
             {"shortcuts", "Creating Start Menu shortcuts and PATH entry",
              {
                  QString("powershell -Command \"& { "
@@ -1299,7 +1290,6 @@ private:
         proc->start("cmd.exe", { "/C", cmd });
     }
 
-    // ── Icons
     static QPixmap makeSuccessIcon(int size) {
         QPixmap pm(160, 160);
         pm.fill(Qt::transparent);
@@ -1326,7 +1316,6 @@ private:
         return pm.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
 
-    // ── Members
     QStackedWidget* stack_ = nullptr;
     Background*     bg_ = nullptr;
     WindowControls* controls_ = nullptr;
@@ -1345,7 +1334,6 @@ private:
 //  main — with elevation check
 // ============================================================================
 int main(int argc, char** argv) {
-    // ── Check if we've already been elevated (avoid infinite loop)
     bool alreadyElevated = false;
     for (int i = 0; i < argc; ++i) {
         if (QString::fromLocal8Bit(argv[i]) == "--elevated") {
@@ -1354,13 +1342,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ── If not admin, try to elevate and exit
     if (!isRunningAsAdmin() && !alreadyElevated) {
         if (relaunchAsAdmin()) {
-            return 0;   // original process exits; elevated one takes over
+            return 0;
         }
 
-        // User declined UAC or elevation failed
         QApplication app(argc, argv);
         QMessageBox::critical(
             nullptr,
@@ -1373,7 +1359,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // ── We're elevated — proceed normally
     QApplication app(argc, argv);
     app.setApplicationName(kAppName);
     app.setStyle("Fusion");
