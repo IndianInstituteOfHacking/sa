@@ -14,23 +14,14 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      # ────────────────────────────────────────────────────────────────
-      # 1. Checkout
-      # ────────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ────────────────────────────────────────────────────────────────
-      # 2. Setup Python (for aqtinstall)
-      # ────────────────────────────────────────────────────────────────
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ────────────────────────────────────────────────────────────────
-      # 3. Cache Qt (10x faster subsequent builds)
-      # ────────────────────────────────────────────────────────────────
       - name: Cache Qt
         id: cache-qt
         uses: actions/cache@v4
@@ -38,18 +29,12 @@ jobs:
           path: C:\Qt
           key: qt-6.6.0-msvc2019_64-v1
 
-      # ────────────────────────────────────────────────────────────────
-      # 4. Install aqtinstall
-      # ────────────────────────────────────────────────────────────────
       - name: Install aqtinstall
         if: steps.cache-qt.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-      # ────────────────────────────────────────────────────────────────
-      # 5. Download & Install Qt 6.6 (MSVC 2019 64-bit)
-      # ────────────────────────────────────────────────────────────────
       - name: Install Qt 6.6.0 (MSVC 2019 64-bit)
         if: steps.cache-qt.outputs.cache-hit != 'true'
         shell: pwsh
@@ -58,18 +43,11 @@ jobs:
             --outputdir C:\Qt `
             --archives qtbase qtwebengine qtsvg
 
-      # ────────────────────────────────────────────────────────────────
-      # 6. Setup MSVC
-      # ────────────────────────────────────────────────────────────────
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # ────────────────────────────────────────────────────────────────
-      # 7. Compile installer_windows.cpp
-      #    FIXED: Added /permissive- /DNOMINMAX /DWIN32_LEAN_AND_MEAN
-      # ────────────────────────────────────────────────────────────────
       - name: Compile installer
         shell: cmd
         run: |
@@ -81,14 +59,11 @@ jobs:
              /I "C:\Qt\6.6.0\msvc2019_64\include\QtWidgets" ^
              /I "C:\Qt\6.6.0\msvc2019_64\include\QtGui" ^
              /I "C:\Qt\6.6.0\msvc2019_64\include\QtCore" ^
-             /link /SUBSYSTEM:WINDOWS ^
+             /link /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup ^
              /LIBPATH:"C:\Qt\6.6.0\msvc2019_64\lib" ^
              Qt6Widgets.lib Qt6Gui.lib Qt6Core.lib ^
              user32.lib shell32.lib advapi32.lib
 
-      # ────────────────────────────────────────────────────────────────
-      # 8. Bundle Qt runtime DLLs
-      # ────────────────────────────────────────────────────────────────
       - name: Bundle Qt runtime DLLs
         shell: cmd
         run: |
@@ -99,9 +74,6 @@ jobs:
              --no-opengl-sw ^
              RootBrowser-Setup.exe
 
-      # ────────────────────────────────────────────────────────────────
-      # 9. Prepare release folder
-      # ────────────────────────────────────────────────────────────────
       - name: Prepare release folder
         shell: pwsh
         run: |
@@ -118,9 +90,6 @@ jobs:
           if (Test-Path "tls")           { Copy-Item -Recurse tls release\ }
           if (Test-Path "translations")  { Copy-Item -Recurse translations release\ }
 
-      # ────────────────────────────────────────────────────────────────
-      # 10. Upload artifact
-      # ────────────────────────────────────────────────────────────────
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -128,9 +97,6 @@ jobs:
           path: release/
           retention-days: 30
 
-      # ────────────────────────────────────────────────────────────────
-      # 11. Package for release (if tag)
-      # ────────────────────────────────────────────────────────────────
       - name: Package for release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
@@ -138,9 +104,6 @@ jobs:
           Compress-Archive -Path release\* `
             -DestinationPath RootBrowser-Setup-Windows.zip -Force
 
-      # ────────────────────────────────────────────────────────────────
-      # 12. Create GitHub Release (if tag)
-      # ────────────────────────────────────────────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
